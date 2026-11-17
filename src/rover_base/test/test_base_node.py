@@ -80,6 +80,55 @@ def test_watchdog_thread_stops_motors_even_if_ros_is_stuck():
         n.destroy_node()
 
 
+class DroppingBus(FakeBus):
+    """Like the real board: silently ignores some writes. Tracks what the board 'really' does."""
+
+    def __init__(self):
+        super().__init__()
+        self.drop_next = 0
+        self.motor_state = {}
+
+    def write_i2c_block_data(self, address, register, data):
+        if self.drop_next:
+            self.drop_next -= 1
+            return  # lost, and nobody is told
+        super().write_i2c_block_data(address, register, data)
+        if register == p.REG_MOTOR:
+            motor, direction, speed = data
+            self.motor_state[motor] = -speed if direction else speed
+
+
+def test_lost_stop_is_corrected_by_refresh():
+    bus = DroppingBus()
+    n = RoverBase(board=Board(bus, sleep=lambda s: None), start_watchdog=False)
+    try:
+        n.on_cmd_vel(twist(x=0.2))
+        assert all(v > 0 for v in bus.motor_state.values())
+        bus.drop_next = 2                       # the stop for L1 and L2 gets lost
+        n.on_cmd_vel(twist())
+        assert bus.motor_state[0] > 0          # the board still drives L1 although we sent stop
+        assert n.current_pwm == (0, 0, 0, 0)   # ...and the node believes it stopped
+        n.last_write_time -= 0.2               # 0.2 s later the watchdog thread refreshes
+        n.refresh_motors()
+        assert bus.motor_state == {0: 0, 1: 0, 2: 0, 3: 0}
+    finally:
+        n.running = False
+        n.destroy_node()
+
+
+def test_refresh_keeps_running_thread_sending_state():
+    n = make_node(start_watchdog=True)
+    try:
+        n.on_cmd_vel(twist(x=0.2))
+        writes_before = len(n.bus.writes_to(p.REG_MOTOR))
+        time.sleep(0.35)  # commands keep "arriving" (we refresh last_cmd_time below)
+        n.last_cmd_time = time.monotonic()
+        assert len(n.bus.writes_to(p.REG_MOTOR)) > writes_before  # state was re-sent
+    finally:
+        n.running = False
+        n.destroy_node()
+
+
 def test_shutdown_stops_motors(node):
     node.on_cmd_vel(twist(wz=1.0))
     node.shutdown()

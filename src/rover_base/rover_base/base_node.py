@@ -7,6 +7,9 @@ Safety:
 - The motor board keeps the last speed forever, so a separate watchdog THREAD (not a ROS timer)
   stops the motors when no /cmd_vel has arrived for `cmd_timeout` seconds. It keeps working
   even if the ROS side of this node is stuck (e.g. while the network interface is reset).
+- The board can silently miss a write (no I2C error), so the same thread also re-sends the
+  current motor state every 0.25 s (every 0.1 s for 1 s after a change, so a lost stop is
+  corrected quickly).
 - Motors also stop on start-up and shutdown.
 With `use_fake_bus: true` it runs anywhere (WSL, CI) and only logs what it would send.
 """
@@ -27,6 +30,7 @@ from rover_driver import Board, FakeBus
 from .mecanum import Geometry, MotorLimits, body_to_wheels, wheels_to_pwm
 
 STOPPED = (0, 0, 0, 0)
+REFRESH_S = 0.25  # re-send the motor state this often, in case the board missed a write
 
 
 class RoverBase(Node):
@@ -54,6 +58,7 @@ class RoverBase(Node):
         self.board_lock = threading.Lock()
         self.last_cmd_time = -1e9
         self.current_pwm = STOPPED
+        self.last_change_time = self.last_write_time = time.monotonic()
         with self.board_lock:
             self.board.stop()
 
@@ -86,6 +91,7 @@ class RoverBase(Node):
         """Runs in its own thread, independent of the ROS executor."""
         while self.running:
             self.check_watchdog()
+            self.refresh_motors()
             time.sleep(0.05)
 
     def check_watchdog(self) -> None:
@@ -93,12 +99,28 @@ class RoverBase(Node):
             self.set_pwm(STOPPED)
             self.get_logger().warning("no /cmd_vel for %.1f s: motors stopped" % self.cmd_timeout)
 
+    def refresh_motors(self) -> None:
+        """Re-send the current motor state, because the board can silently miss a write.
+
+        Every REFRESH_S normally, and every 0.1 s during the first second after a change
+        (so a lost stop is corrected within ~0.1 s).
+        """
+        now = time.monotonic()
+        since_change = now - self.last_change_time
+        interval = 0.1 if since_change < 1.0 else REFRESH_S
+        if now - self.last_write_time < interval:
+            return
+        with self.board_lock:
+            self.board.set_motors(*self.current_pwm)
+            self.last_write_time = time.monotonic()
+
     def set_pwm(self, pwm: tuple[int, int, int, int]) -> None:
         with self.board_lock:
             if pwm == self.current_pwm:
                 return
             self.board.set_motors(*pwm)
             self.current_pwm = pwm
+            self.last_change_time = self.last_write_time = time.monotonic()
         if self.use_fake_bus:
             self.get_logger().info(f"motors FL/RL/FR/RR = {pwm}")
 

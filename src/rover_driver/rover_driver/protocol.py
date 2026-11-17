@@ -29,6 +29,7 @@ REG_DISTANCE_HIGH = 0x1B
 
 NUM_LEDS = 14
 LIGHT_WRITE_GAP_S = 0.05  # the board needs >= 50 ms between light-bar writes
+MOTOR_WRITE_GAP_S = 0.005  # small gap between motor writes; back-to-back writes can be missed
 IR_NO_KEY = 0xFF
 
 

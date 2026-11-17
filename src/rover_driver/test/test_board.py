@@ -86,6 +86,11 @@ def test_light_writes_are_spaced_50ms(board, clock):
     assert clock.slept == [pytest.approx(0.05)]
 
 
+def test_motor_writes_are_spaced(board, clock):
+    board.set_motors(10, 10, 10, 10)
+    assert clock.slept == [pytest.approx(p.MOTOR_WRITE_GAP_S)] * 3
+
+
 # --- sensors -----------------------------------------------------------------------------------
 
 def test_distance_example_from_sheet(board, bus):

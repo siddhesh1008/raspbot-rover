@@ -67,7 +67,16 @@ class Board:
         self._write(p.REG_MOTOR, p.motor_bytes(motor, speed))
 
     def set_motors(self, l1: int, l2: int, r1: int, r2: int) -> None:
-        for motor, speed in zip(p.Motor, (l1, l2, r1, r2)):
+        """All four motors, with a short gap between writes.
+
+        The board's microcontroller can silently miss a write that follows another one too
+        closely (seen on the robot: a stop was lost and the wheels kept turning). The bus
+        reports no error in that case, so callers that must be safe should also re-send the
+        state periodically (rover_base does).
+        """
+        for i, (motor, speed) in enumerate(zip(p.Motor, (l1, l2, r1, r2))):
+            if i:
+                self._sleep(p.MOTOR_WRITE_GAP_S)
             self.set_motor(motor, speed)
 
     def stop(self) -> None:
