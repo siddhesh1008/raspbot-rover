@@ -14,7 +14,7 @@ def server(tmp_path):
     page = tmp_path / "index.html"
     page.write_text("<h1>rover</h1>")
     received = []
-    s = HmiServer(page, received.append, lambda: {"distance_m": 1.25}, host="127.0.0.1", port=0,
+    s = HmiServer(page, lambda cmd, seq: received.append((cmd, seq)), lambda: {"distance_m": 1.25}, host="127.0.0.1", port=0,
                   max_linear=0.5, max_angular=2.0)
     s.received = received
     s.start()
@@ -40,18 +40,25 @@ def test_status_has_distance_and_limits(server):
 
 
 def test_cmd_is_passed_on(server):
-    request(server, "/cmd", {"vx": 0.2, "vy": -0.1, "wz": 1.0})
-    assert server.received == [(0.2, -0.1, 1.0)]
+    request(server, "/cmd", {"vx": 0.2, "vy": -0.1, "wz": 1.0, "seq": 7})
+    assert server.received == [((0.2, -0.1, 1.0), 7)]
 
 
 def test_cmd_is_clamped(server):
     request(server, "/cmd", {"vx": 9, "vy": -9, "wz": 99})
-    assert server.received == [(0.5, -0.5, 2.0)]
+    assert server.received == [((0.5, -0.5, 2.0), None)]
 
 
 def test_stop(server):
-    request(server, "/stop", {})
-    assert server.received == [(0.0, 0.0, 0.0)]
+    request(server, "/stop", {"seq": 3})
+    assert server.received == [((0.0, 0.0, 0.0), 3)]
+
+
+def test_stop_works_even_with_a_broken_body(server):
+    req = urllib.request.Request(f"http://127.0.0.1:{server.port}/stop", data=b"garbage", method="POST")
+    with urllib.request.urlopen(req, timeout=3) as r:
+        assert r.status == 200
+    assert server.received == [((0.0, 0.0, 0.0), None)]
 
 
 def test_bad_json_is_rejected_and_not_passed_on(server):

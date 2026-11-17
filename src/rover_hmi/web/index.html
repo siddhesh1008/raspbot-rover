@@ -143,33 +143,47 @@
     if (s.max_angular) $("ang").max = s.max_angular;
   }
 
+  // Every request carries an increasing sequence number; the rover ignores anything older than
+  // what it has already handled, so a stop can never be overtaken by an earlier drive command.
+  let seq = 0, lastSent = "";
+
   async function post(path, body) {
-    if (sending) return;           // never queue requests up behind a slow one
-    sending = true;
+    body.seq = ++seq;
     try {
       const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify(body), cache: "no-store" });
+                                    body: JSON.stringify(body), cache: "no-store", keepalive: true });
       if (r.ok) showStatus(await r.json());
     } catch (e) { /* shown by the connection dot */ }
-    finally { sending = false; }
+    finally { if (path === "/cmd") sending = false; }
+  }
+
+  function sendStop() {              // always sent at once, never skipped
+    lastSent = "";
+    wasMoving = false;
+    post("/stop", {});
+  }
+
+  // Send the current command. Repeats of the same command are skipped while one is still on
+  // its way (no pile-up on slow Wi-Fi); a changed command or a stop always goes out immediately.
+  function update(force) {
+    const cmd = command();
+    render(cmd);
+    const moving = cmd.vx || cmd.vy || cmd.wz;
+    if (!moving) { if (wasMoving) sendStop(); return; }
+    const key = JSON.stringify(cmd);
+    if (sending && key === lastSent && !force) return;
+    sending = true; wasMoving = true; lastSent = key;
+    post("/cmd", cmd);
   }
 
   function stopAll() {
     held.clear();
     render(command());
-    sending = false;
-    post("/stop", {});
-    wasMoving = false;
+    sendStop();
   }
 
-  // 20 Hz: while moving, keep sending the command (the rover stops if they stop arriving)
-  setInterval(() => {
-    const cmd = command();
-    render(cmd);
-    const moving = cmd.vx || cmd.vy || cmd.wz;
-    if (moving) { post("/cmd", cmd); wasMoving = true; }
-    else if (wasMoving) { post("/stop", {}); wasMoving = false; }
-  }, 50);
+  // 20 Hz: keep re-sending while moving (the rover stops by itself if they stop arriving)
+  setInterval(() => update(false), 50);
 
   // status when idle + connection indicator
   setInterval(async () => {
@@ -185,16 +199,24 @@
   addEventListener("keydown", e => {
     const k = e.key.toLowerCase();
     if (k === " ") { e.preventDefault(); stopAll(); return; }
-    if (DRIVE_KEYS.has(k)) { e.preventDefault(); held.add(k); }
+    if (DRIVE_KEYS.has(k)) {
+      e.preventDefault();
+      if (!held.has(k)) { held.add(k); update(true); }   // react on press, not on the next tick
+    }
   });
-  addEventListener("keyup", e => held.delete(e.key.toLowerCase()));
+  addEventListener("keyup", e => {
+    const k = e.key.toLowerCase();
+    if (held.delete(k)) update(true);                    // react on release immediately
+  });
   addEventListener("blur", stopAll);
   document.addEventListener("visibilitychange", () => { if (document.hidden) stopAll(); });
 
   // on-screen buttons (mouse and touch)
   for (const [k, el] of Object.entries(keyEls)) {
-    el.addEventListener("pointerdown", e => { el.setPointerCapture(e.pointerId); held.add(k); });
-    for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(ev, () => held.delete(k));
+    el.addEventListener("pointerdown", e => { el.setPointerCapture(e.pointerId); held.add(k); update(true); });
+    for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) {
+      el.addEventListener(ev, () => { if (held.delete(k)) update(true); });
+    }
   }
   $("stop").addEventListener("pointerdown", stopAll);
 

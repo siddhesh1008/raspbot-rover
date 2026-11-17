@@ -2,8 +2,12 @@
 
     GET  /          the control page (index.html)
     GET  /status    {"distance_m": ..., "max_linear": ..., "max_angular": ...}
-    POST /cmd       {"vx": m/s, "vy": m/s, "wz": rad/s}  -> clamped, passed to on_cmd
-    POST /stop      same as a zero command
+    POST /cmd       {"vx": m/s, "vy": m/s, "wz": rad/s, "seq": n}  -> clamped, on_cmd(cmd, seq)
+    POST /stop      {"seq": n}                                    -> on_cmd((0, 0, 0), seq)
+
+`seq` is an increasing request number from the page. Requests can arrive out of order (each
+one may use its own connection), so the receiver drops any request older than the newest it
+has handled: a stop is never undone by a drive command that was sent before it.
 
 The page re-sends /cmd about 20 times a second while a key is held. The node stops the rover
 when commands stop arriving, so a closed tab or lost Wi-Fi also stops it.
@@ -35,11 +39,16 @@ def clamp_command(data: dict, max_linear: float, max_angular: float) -> Command:
     return (num("vx", max_linear), num("vy", max_linear), num("wz", max_angular))
 
 
+def parse_seq(data: dict) -> int | None:
+    seq = data.get("seq")
+    return seq if isinstance(seq, int) and not isinstance(seq, bool) else None
+
+
 class HmiServer:
     def __init__(
         self,
         page: Path,
-        on_cmd: Callable[[Command], None],
+        on_cmd: Callable[[Command, int | None], None],
         get_status: Callable[[], dict],
         host: str = "0.0.0.0",
         port: int = 8080,
@@ -85,11 +94,7 @@ class HmiServer:
                     self._send(404, b"not found", "text/plain")
 
             def do_POST(self) -> None:
-                if self.path == "/stop":
-                    server.on_cmd((0.0, 0.0, 0.0))
-                    self._json(server.status())
-                    return
-                if self.path != "/cmd":
+                if self.path not in ("/cmd", "/stop"):
                     self._send(404, b"not found", "text/plain")
                     return
                 try:
@@ -98,9 +103,17 @@ class HmiServer:
                     if not isinstance(data, dict):
                         raise ValueError
                 except ValueError:
-                    self._send(400, b"bad json", "text/plain")
+                    if self.path == "/stop":      # a stop always works, even with a broken body
+                        server.on_cmd((0.0, 0.0, 0.0), None)
+                        self._json(server.status())
+                    else:
+                        self._send(400, b"bad json", "text/plain")
                     return
-                server.on_cmd(clamp_command(data, server.max_linear, server.max_angular))
+                if self.path == "/stop":
+                    cmd: Command = (0.0, 0.0, 0.0)
+                else:
+                    cmd = clamp_command(data, server.max_linear, server.max_angular)
+                server.on_cmd(cmd, parse_seq(data))
                 self._json(server.status())
 
             def _json(self, obj: dict) -> None:

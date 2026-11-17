@@ -26,9 +26,10 @@ ZERO: Command = (0.0, 0.0, 0.0)
 
 
 class HmiNode(Node):
-    def __init__(self) -> None:
+    def __init__(self, port: int | None = None) -> None:
         super().__init__("rover_hmi")
-        port = self.declare_parameter("port", 8080).value
+        port_param = self.declare_parameter("port", 8080).value
+        port = port_param if port is None else port  # tests pass 0 = any free port
         self.cmd_timeout = self.declare_parameter("cmd_timeout", 0.3).value
         max_linear = self.declare_parameter("max_linear", 0.6).value
         max_angular = self.declare_parameter("max_angular", 3.0).value
@@ -36,6 +37,7 @@ class HmiNode(Node):
         self.lock = threading.Lock()
         self.command: Command = ZERO
         self.last_cmd_time = 0.0
+        self.last_seq = 0
         self.active = False
         self.distance_m: float | None = None
 
@@ -53,10 +55,25 @@ class HmiNode(Node):
         self.server.start()
         self.get_logger().info(f"HMI running: open http://rover.local:{self.server.port} in a browser")
 
-    def on_browser_cmd(self, cmd: Command) -> None:  # called from the web server thread
+    def on_browser_cmd(self, cmd: Command, seq: int | None = None) -> None:
+        """Called from the web server thread for every /cmd and /stop request."""
+        now = time.monotonic()
         with self.lock:
+            # Drop requests that arrive after a newer one (e.g. a drive command overtaking the
+            # stop that followed it). After a pause of 1 s, accept anything again: a reloaded
+            # page starts counting from 1.
+            if seq is not None and seq <= self.last_seq and now - self.last_cmd_time < 1.0:
+                return
+            if seq is not None:
+                self.last_seq = seq
             self.command = cmd
-            self.last_cmd_time = time.monotonic()
+            self.last_cmd_time = now
+            stop_now = cmd == ZERO and self.active
+            self.active = cmd != ZERO
+        if stop_now:
+            self.publish(ZERO)  # don't wait for the next timer tick
+        elif cmd != ZERO:
+            self.publish(cmd)   # a new or changed command goes out at once too
 
     def status(self) -> dict:
         with self.lock:
@@ -70,12 +87,13 @@ class HmiNode(Node):
         with self.lock:
             fresh = time.monotonic() - self.last_cmd_time < self.cmd_timeout
             cmd = self.command if fresh else ZERO
-        if fresh and cmd != ZERO:
+            send_cmd = fresh and cmd != ZERO
+            send_stop = not send_cmd and self.active   # browser gone quiet while moving
+            self.active = send_cmd
+        if send_cmd:
             self.publish(cmd)
-            self.active = True
-        elif self.active:          # just stopped (released, STOP pressed, or browser gone)
+        elif send_stop:
             self.publish(ZERO)
-            self.active = False
 
     def publish(self, cmd: Command) -> None:
         msg = Twist()
