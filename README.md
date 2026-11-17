@@ -28,7 +28,8 @@ raspbot-rover/
 │   └── wsl_ros_network.sh     WSL fix: ROS only on the home network + localhost (see below)
 └── src/                       ROS 2 workspace packages (built with colcon)
     ├── rover_driver/          our I2C driver: plain Python, no ROS, fully unit-tested
-    └── rover_base/            ROS node: /cmd_vel → mecanum wheels, /ultrasonic, safety watchdog
+    ├── rover_base/            ROS node: /cmd_vel → mecanum wheels, /ultrasonic, safety watchdog
+    └── rover_teleop/          WASD keyboard driving (runs in WSL)
 ```
 
 Planned packages: `rover_description` (URDF model), `rover_sim` (Gazebo worlds),
@@ -52,9 +53,12 @@ Drive the rover from the PC:
 ```bash
 # on the rover
 ros2 launch rover_base base.launch.py
-# in WSL (a second terminal); hold Shift for sideways moves (mecanum)
-ros2 run teleop_twist_keyboard teleop_twist_keyboard
+# in WSL (a second terminal): W/S forward/back, A/D turn, Q/E slide sideways, space stop, +/- speed
+ros2 run rover_teleop wasd
 ```
+
+Hold a key to keep moving; the rover stops 0.6 s after you let go (a terminal can't see key
+releases, so this is set just longer than the keyboard's auto-repeat delay).
 
 Without the robot: `ros2 launch rover_base base.launch.py fake:=true` logs the motor values.
 
