@@ -1,6 +1,7 @@
 import pytest
 
-from rover_base.mecanum import Geometry, MotorLimits, WheelSpeeds, body_to_wheels, wheels_to_body, wheels_to_pwm
+from rover_base.mecanum import (Geometry, MotorLimits, WheelSpeeds, body_to_wheels, ramp_toward,
+                                wheels_to_body, wheels_to_pwm)
 
 G = Geometry(half_wheelbase=0.08, half_track=0.085)
 
@@ -44,3 +45,22 @@ def test_small_commands_are_raised_to_min_pwm():
 
 def test_deadband_stops_tiny_speeds():
     assert wheels_to_pwm(WheelSpeeds(0.001, 0, 0, 0)) == (0, 0, 0, 0)
+
+
+def test_ramp_limits_speed_up():
+    assert ramp_toward((0, 0, 0, 0), (102, 102, 102, 102), 40) == (40, 40, 40, 40)
+    assert ramp_toward((80, 80, 80, 80), (102, 102, 102, 102), 40) == (102, 102, 102, 102)
+
+
+def test_full_stop_is_instant():
+    assert ramp_toward((160, -160, 160, -160), (0, 0, 0, 0), 40) == (0, 0, 0, 0)
+
+
+def test_reversing_passes_through_zero_gradually():
+    assert ramp_toward((60, 60, 60, 60), (-60, 60, 60, -60), 40) == (20, 60, 60, 20)
+
+
+def test_switching_direction_is_smooth():
+    # forward -> slide left: two wheels must reverse, so no instant jump
+    nxt = ramp_toward((102, 102, 102, 102), (-102, 102, 102, -102), 40)
+    assert nxt == (62, 102, 102, 62)

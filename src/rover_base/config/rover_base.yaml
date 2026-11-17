@@ -11,5 +11,6 @@ rover_base:
     max_wheel_speed: 0.5       # m/s of a wheel at PWM 255; tune by timing a straight drive
     max_pwm: 160               # safety cap while testing indoors (board max is 255)
     min_pwm: 35                # smallest PWM that still turns the wheels
+    ramp_pwm_per_s: 800        # acceleration limit (0 -> 160 in 0.2 s); stops are always instant
 
     publish_ultrasonic: true

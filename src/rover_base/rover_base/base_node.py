@@ -7,6 +7,8 @@ Safety:
 - The motor board keeps the last speed forever, so a separate watchdog THREAD (not a ROS timer)
   stops the motors when no /cmd_vel has arrived for `cmd_timeout` seconds. It keeps working
   even if the ROS side of this node is stuck (e.g. while the network interface is reset).
+- Speed-ups are limited by an acceleration ramp (`ramp_pwm_per_s`); a full stop is instant.
+- /cmd_vel is subscribed with queue depth 1: only the latest command matters, old ones are dropped.
 - The board can silently miss a write (no I2C error), so the same thread also re-sends the
   current motor state every 0.25 s (every 0.1 s for 1 s after a change, so a lost stop is
   corrected quickly).
@@ -27,10 +29,11 @@ from sensor_msgs.msg import Range
 
 from rover_driver import Board, FakeBus
 
-from .mecanum import Geometry, MotorLimits, body_to_wheels, wheels_to_pwm
+from .mecanum import Geometry, MotorLimits, body_to_wheels, ramp_toward, wheels_to_pwm
 
 STOPPED = (0, 0, 0, 0)
 REFRESH_S = 0.25  # re-send the motor state this often, in case the board missed a write
+LOOP_S = 0.05     # motor thread period: watchdog, acceleration ramp, refresh
 
 
 class RoverBase(Node):
@@ -46,6 +49,8 @@ class RoverBase(Node):
             min_pwm=p("min_pwm", 35).value,
         )
         self.publish_ultrasonic = p("publish_ultrasonic", True).value
+        # acceleration limit: PWM change per second (stops are always instant)
+        self.ramp_step = max(1, int(p("ramp_pwm_per_s", 800).value * LOOP_S))
 
         if board is not None:
             self.board = board
@@ -57,12 +62,13 @@ class RoverBase(Node):
         # One lock for all board access: the ROS callbacks and the watchdog thread share the bus.
         self.board_lock = threading.Lock()
         self.last_cmd_time = -1e9
-        self.current_pwm = STOPPED
+        self.current_pwm = STOPPED   # what the motors are set to now
+        self.target_pwm = STOPPED    # what the latest /cmd_vel asks for (reached via the ramp)
         self.last_change_time = self.last_write_time = time.monotonic()
         with self.board_lock:
             self.board.stop()
 
-        self.create_subscription(Twist, "cmd_vel", self.on_cmd_vel, 10)
+        self.create_subscription(Twist, "cmd_vel", self.on_cmd_vel, 1)  # latest only: never act on an old queued command
 
         if self.publish_ultrasonic:
             with self.board_lock:
@@ -85,19 +91,32 @@ class RoverBase(Node):
     def on_cmd_vel(self, msg: Twist) -> None:
         wheels = body_to_wheels(msg.linear.x, msg.linear.y, msg.angular.z, self.geometry)
         self.last_cmd_time = time.monotonic()
-        self.set_pwm(wheels_to_pwm(wheels, self.limits))
+        self.target_pwm = wheels_to_pwm(wheels, self.limits)
+        # React at once to a stop (applied completely) and to a start from standstill (first ramp
+        # step). Everything else is paced by the motor thread, so a fast stream of commands
+        # can't speed up the ramp.
+        if self.target_pwm == STOPPED or self.current_pwm == STOPPED:
+            self.step_ramp()
 
     def watchdog_loop(self) -> None:
         """Runs in its own thread, independent of the ROS executor."""
         while self.running:
             self.check_watchdog()
+            self.step_ramp()
             self.refresh_motors()
-            time.sleep(0.05)
+            time.sleep(LOOP_S)
 
     def check_watchdog(self) -> None:
-        if self.current_pwm != STOPPED and time.monotonic() - self.last_cmd_time > self.cmd_timeout:
+        stale = time.monotonic() - self.last_cmd_time > self.cmd_timeout
+        if stale and (self.current_pwm != STOPPED or self.target_pwm != STOPPED):
+            self.target_pwm = STOPPED
             self.set_pwm(STOPPED)
             self.get_logger().warning("no /cmd_vel for %.1f s: motors stopped" % self.cmd_timeout)
+
+    def step_ramp(self) -> None:
+        target = self.target_pwm
+        if self.current_pwm != target:
+            self.set_pwm(ramp_toward(self.current_pwm, target, self.ramp_step))
 
     def refresh_motors(self) -> None:
         """Re-send the current motor state, because the board can silently miss a write.
@@ -143,6 +162,7 @@ class RoverBase(Node):
 
     def shutdown(self) -> None:
         self.running = False
+        self.target_pwm = STOPPED
         try:
             with self.board_lock:
                 self.board.stop()

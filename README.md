@@ -60,6 +60,15 @@ Open **http://rover.local:8080** on the PC (or a phone on the same Wi-Fi). Hold 
 drive and turn, **Q/E** to slide sideways; keys combine (W+A curves). On-screen buttons work with
 mouse and touch. The page shows the ultrasonic distance and has speed sliders.
 The rover stops when you let go, press space or STOP, switch tabs, or the connection drops.
+Opposite keys together (W+S, Q+E, A+D) stop the rover and lock driving until all keys are released.
+
+How driving stays responsive and safe:
+- **Latest wins.** The page keeps at most one request in flight and only sends the newest command;
+  `/cmd_vel` has queue depth 1. Old commands are dropped, never replayed late.
+- **Acceleration ramp, instant stop.** `rover_base` ramps speed up (`ramp_pwm_per_s`, about 0.15 s to
+  cruising speed) but a stop is applied at once.
+- **Watchdogs.** The HMI stops after 0.4 s without requests; `rover_base` has its own thread that
+  stops after 0.5 s without `/cmd_vel` and re-sends the motor state (the board can miss a write).
 
 Test without the robot (in WSL): `ros2 launch rover_bringup rover.launch.py fake:=true`, then
 http://localhost:8080. Fake mode runs in the `/fake` namespace, so it can never drive the real

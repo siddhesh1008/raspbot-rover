@@ -133,3 +133,12 @@ def test_shutdown_stops_motors(node):
     node.on_cmd_vel(twist(wz=1.0))
     node.shutdown()
     assert last_motor_writes(node.bus) == ALL_STOPPED
+
+
+def test_start_is_ramped_but_stop_is_instant(node):
+    node.on_cmd_vel(twist(x=0.2))                  # target 102 on all wheels
+    assert node.current_pwm == (40, 40, 40, 40)    # first step only
+    node.step_ramp(); node.step_ramp()
+    assert node.current_pwm == (102, 102, 102, 102)
+    node.on_cmd_vel(twist())                       # release
+    assert node.current_pwm == (0, 0, 0, 0)        # instantly

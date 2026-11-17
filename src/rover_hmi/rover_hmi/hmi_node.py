@@ -42,7 +42,7 @@ class HmiNode(Node):
         self.active = False
         self.distance_m: float | None = None
 
-        self.pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.pub = self.create_publisher(Twist, "cmd_vel", 1)  # latest only, no queue of old commands
         # sensor-data QoS (best effort) to match rover_base, which never blocks on this topic
         self.create_subscription(Range, "ultrasonic", self.on_range, qos_profile_sensor_data)
         self.create_timer(0.05, self.tick)

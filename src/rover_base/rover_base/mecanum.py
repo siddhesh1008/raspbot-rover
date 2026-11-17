@@ -60,6 +60,17 @@ def wheels_to_body(w: WheelSpeeds, geometry: Geometry = Geometry()) -> tuple[flo
     return vx, vy, wz
 
 
+def ramp_toward(current: tuple[int, ...], target: tuple[int, ...], max_step: int) -> tuple[int, ...]:
+    """One step of the acceleration ramp: move each motor at most `max_step` towards its target.
+
+    A full stop (all targets 0) is never ramped: stopping is always immediate, for safety.
+    Reversing a wheel passes through 0 at the same rate, so direction changes are smooth too.
+    """
+    if all(t == 0 for t in target):
+        return tuple(0 for _ in target)
+    return tuple(c + max(-max_step, min(max_step, t - c)) for c, t in zip(current, target))
+
+
 def wheels_to_pwm(w: WheelSpeeds, limits: MotorLimits = MotorLimits()) -> tuple[int, int, int, int]:
     """Wheel speeds (m/s) -> signed PWM per motor, in board order (L1 FL, L2 RL, R1 FR, R2 RR).
 

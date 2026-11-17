@@ -57,6 +57,8 @@
   input[type=range] { width: 100%; }
   .help { color: var(--muted); font-size: 13px; margin: 0; }
   .banner { background: var(--bad); color: #fff; border-radius: 10px; padding: 12px 14px; font-weight: 500; }
+  .locked { margin: 12px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--key);
+            color: var(--warn); font-weight: 600; font-size: 14px; }
   [hidden] { display: none !important; }
   kbd { background: var(--key); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, monospace; }
   @media (max-width: 520px) {
@@ -92,6 +94,7 @@
       <div><span>sideways</span><b id="vy">0.00</b> m/s</div>
       <div><span>turn</span><b id="wz">0.00</b> rad/s</div>
     </div>
+    <p class="locked" id="locked" hidden>Opposite keys pressed together: stopped. Release all keys to drive again.</p>
   </section>
 
   <section class="panel distance">
@@ -114,12 +117,20 @@
   const held = new Set();
   const $ = id => document.getElementById(id);
   const keyEls = Object.fromEntries([...document.querySelectorAll(".key")].map(el => [el.dataset.key, el]));
-  let lastOk = 0, wasMoving = false, sending = false;
+  let lastOk = 0, wasMoving = false;
 
   const lin = () => parseFloat($("lin").value);
   const ang = () => parseFloat($("ang").value);
 
+  // Opposite keys together (W+S, Q+E, A+D) are a conflict: stop, and don't drive again until
+  // ALL keys are released. Otherwise letting go of one of them would make the rover jump.
+  const OPPOSITE = [["w", "s"], ["q", "e"], ["a", "d"]];
+  let locked = false;
+
   function command() {
+    if (!locked && OPPOSITE.some(([a, b]) => held.has(a) && held.has(b))) locked = true;
+    if (locked && held.size === 0) locked = false;
+    if (locked) return { vx: 0, vy: 0, wz: 0 };
     const on = k => held.has(k) ? 1 : 0;
     return {
       vx: (on("w") - on("s")) * lin(),
@@ -133,6 +144,7 @@
     $("vx").textContent = cmd.vx.toFixed(2);
     $("vy").textContent = cmd.vy.toFixed(2);
     $("wz").textContent = cmd.wz.toFixed(2);
+    $("locked").hidden = !locked;
   }
 
   function showStatus(s) {
@@ -150,7 +162,7 @@
 
   // Every request carries an increasing sequence number; the rover ignores anything older than
   // what it has already handled, so a stop can never be overtaken by an earlier drive command.
-  let seq = 0, lastSent = "";
+  let seq = 0;
 
   const TIMEOUT_MS = 500;   // a request without an answer by then counts as failed
   const LOST_MS = 600;      // no answer for this long while driving = connection lost
@@ -165,12 +177,25 @@
     finally { clearTimeout(timer); }
   }
 
-  async function post(path, body) {
+  function post(path, body) {
     body.seq = ++seq;
-    try {
-      await fetchJson(path, { method: "POST", headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify(body) });
-    } finally { if (path === "/cmd") sending = false; }
+    return fetchJson(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                             body: JSON.stringify(body) });
+  }
+
+  // Latest wins: at most ONE drive request on the way. While it travels, only the newest command
+  // is kept (older ones are simply forgotten) and sent when the request returns. No queue builds
+  // up on slow Wi-Fi, so what the rover does is always what the keys say now.
+  let inFlight = false, pending = null;
+  function sendCmd(cmd) {
+    if (inFlight) { pending = cmd; return; }
+    inFlight = true;
+    post("/cmd", cmd).finally(() => {
+      inFlight = false;
+      const next = pending;
+      pending = null;
+      if (next && wasMoving) sendCmd(next);
+    });
   }
 
   // Connection lost while driving: forget every held key and stop. The rover stops by itself
@@ -185,23 +210,19 @@
     $("banner").hidden = false;
   }
 
-  function sendStop() {              // always sent at once, never skipped
-    lastSent = "";
+  function sendStop() {              // always sent at once, never waits, drops any pending command
+    pending = null;
     wasMoving = false;
     post("/stop", {});
   }
 
-  // Send the current command. Repeats of the same command are skipped while one is still on
-  // its way (no pile-up on slow Wi-Fi); a changed command or a stop always goes out immediately.
-  function update(force) {
+  function update() {
     const cmd = command();
     render(cmd);
     const moving = cmd.vx || cmd.vy || cmd.wz;
     if (!moving) { if (wasMoving) sendStop(); return; }
-    const key = JSON.stringify(cmd);
-    if (sending && key === lastSent && !force) return;
-    sending = true; wasMoving = true; lastSent = key;
-    post("/cmd", cmd);
+    wasMoving = true;
+    sendCmd(cmd);
   }
 
   function stopAll() {
@@ -213,7 +234,7 @@
   // 20 Hz: keep re-sending while moving (the rover stops by itself if they stop arriving)
   setInterval(() => {
     if (wasMoving && performance.now() - lastOk > LOST_MS) { connectionLost(); return; }
-    update(false);
+    update();
   }, 50);
 
   // status when idle + connection indicator
@@ -234,12 +255,12 @@
       e.preventDefault();
       if (e.repeat) return;   // only a real new press counts (matters after a lost connection)
       if (lost || performance.now() - lastOk > 2 * LOST_MS) return;   // no connection: don't drive
-      if (!held.has(k)) { held.add(k); update(true); }   // react on press, not on the next tick
+      if (!held.has(k)) { held.add(k); update(); }   // react on press, not on the next tick
     }
   });
   addEventListener("keyup", e => {
     const k = e.key.toLowerCase();
-    if (held.delete(k)) update(true);                    // react on release immediately
+    if (held.delete(k)) update();                    // react on release immediately
   });
   addEventListener("blur", stopAll);
   document.addEventListener("visibilitychange", () => { if (document.hidden) stopAll(); });
@@ -248,10 +269,10 @@
   for (const [k, el] of Object.entries(keyEls)) {
     el.addEventListener("pointerdown", e => {
       if (lost || performance.now() - lastOk > 2 * LOST_MS) return;   // no connection: don't drive
-      el.setPointerCapture(e.pointerId); held.add(k); update(true);
+      el.setPointerCapture(e.pointerId); held.add(k); update();
     });
     for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) {
-      el.addEventListener(ev, () => { if (held.delete(k)) update(true); });
+      el.addEventListener(ev, () => { if (held.delete(k)) update(); });
     }
   }
   $("stop").addEventListener("pointerdown", stopAll);

@@ -32,7 +32,7 @@ class WasdTeleop(Node):
         )
         # must be longer than the keyboard's delay before auto-repeat starts (often ~0.5 s)
         self.hold_timeout = self.declare_parameter("hold_timeout", 0.6).value
-        self.pub = self.create_publisher(Twist, "cmd_vel", 10)
+        self.pub = self.create_publisher(Twist, "cmd_vel", 1)  # latest only, no queue of old commands
         self.command = (0.0, 0.0, 0.0)
         self.last_key_time = 0.0
         self.moving = False
