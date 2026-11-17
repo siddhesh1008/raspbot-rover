@@ -29,11 +29,12 @@ raspbot-rover/
 └── src/                       ROS 2 workspace packages (built with colcon)
     ├── rover_driver/          our I2C driver: plain Python, no ROS, fully unit-tested
     ├── rover_base/            ROS node: /cmd_vel → mecanum wheels, /ultrasonic, safety watchdog
-    └── rover_teleop/          WASD keyboard driving (runs in WSL)
+    ├── rover_hmi/             browser control page, http://rover.local:8080
+    ├── rover_teleop/          WASD keyboard driving in a terminal (runs in WSL)
+    └── rover_bringup/         launch files: everything that runs on the rover
 ```
 
-Planned packages: `rover_description` (URDF model), `rover_sim` (Gazebo worlds),
-`rover_bringup` (launch files).
+Planned packages: `rover_description` (URDF model), `rover_sim` (Gazebo worlds).
 
 ## rover_base
 
@@ -48,7 +49,23 @@ Planned packages: `rover_description` (URDF model), `rover_sim` (Gazebo worlds),
   estimates to tune on the robot.
 - There are no wheel encoders, so speeds are open-loop estimates.
 
-Drive the rover from the PC:
+## Drive from the browser (rover_hmi)
+
+```bash
+# on the rover: base node + web page
+ros2 launch rover_bringup rover.launch.py
+```
+
+Open **http://rover.local:8080** on the PC (or a phone on the same Wi-Fi). Hold **W/A/S/D** to
+drive and turn, **Q/E** to slide sideways; keys combine (W+A curves). On-screen buttons work with
+mouse and touch. The page shows the ultrasonic distance and has speed sliders.
+The rover stops when you let go, press space or STOP, switch tabs, or the connection drops.
+
+Test without the robot (in WSL): `ros2 launch rover_bringup rover.launch.py fake:=true`, then
+http://localhost:8080. Fake mode runs in the `/fake` namespace, so it can never drive the real
+rover, which shares the same ROS network.
+
+## Drive from a terminal (rover_teleop)
 
 ```bash
 # on the rover

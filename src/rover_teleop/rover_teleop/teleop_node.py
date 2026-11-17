@@ -4,8 +4,8 @@
 
 A terminal can't tell when a key is released, only when it is pressed (and the keyboard's
 auto-repeat while held). So the rover keeps moving while key presses keep arriving and stops
-`hold_timeout` seconds after the last one. The command is re-published at 20 Hz so the rover's
-own 0.5 s watchdog never fires while you are driving.
+`hold_timeout` seconds after the last one. While moving, the command is re-published at 20 Hz
+so the rover's own 0.5 s watchdog never fires; when idle, nothing is published.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ class WasdTeleop(Node):
         self.pub = self.create_publisher(Twist, "cmd_vel", 10)
         self.command = (0.0, 0.0, 0.0)
         self.last_key_time = 0.0
+        self.moving = False
 
     def handle_key(self, key: str) -> None:
         if key in FASTER:
@@ -50,9 +51,16 @@ class WasdTeleop(Node):
                 self.last_key_time = time.monotonic()
 
     def tick(self) -> None:
+        """Publish while moving, then one stop, then stay quiet (so other drivers, like the
+        browser HMI, are not overridden while this terminal is idle)."""
         if self.command != (0.0, 0.0, 0.0) and time.monotonic() - self.last_key_time > self.hold_timeout:
             self.command = (0.0, 0.0, 0.0)
-        self.publish(self.command)
+        if self.command != (0.0, 0.0, 0.0):
+            self.publish(self.command)
+            self.moving = True
+        elif self.moving:
+            self.publish(self.command)
+            self.moving = False
 
     def publish(self, cmd: tuple[float, float, float]) -> None:
         msg = Twist()

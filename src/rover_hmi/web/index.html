@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rover Control</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --text: #1d2330; --muted: #6b7280; --line: #e3e6eb;
+    --key: #eef0f4; --key-on: #2563eb; --key-on-text: #ffffff;
+    --ok: #16a34a; --warn: #d97706; --bad: #dc2626; --stop: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11141a; --panel: #1a1f28; --text: #e7eaf0; --muted: #9aa3b2; --line: #2a313d;
+      --key: #252c38; --key-on: #3b82f6; --key-on-text: #ffffff;
+      --ok: #22c55e; --warn: #f59e0b; --bad: #ef4444; --stop: #ef4444;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none; user-select: none;
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; display: grid; gap: 14px; }
+  header { display: flex; align-items: center; justify-content: space-between; }
+  h1 { font-size: 20px; margin: 0; }
+  .conn { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .dot.ok { background: var(--ok); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .drive { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; }
+  .keys { display: grid; grid-template-columns: repeat(3, 72px); grid-template-rows: repeat(2, 72px); gap: 8px; }
+  .key {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--key); color: var(--text);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-weight: 600; font-size: 20px; touch-action: none; cursor: pointer;
+  }
+  .key small { font-weight: 400; font-size: 11px; color: var(--muted); }
+  .key.on { background: var(--key-on); color: var(--key-on-text); border-color: var(--key-on); }
+  .key.on small { color: var(--key-on-text); }
+  .stop {
+    width: 120px; height: 152px; border: 0; border-radius: 12px; background: var(--stop); color: #fff;
+    font: 700 22px system-ui, sans-serif; cursor: pointer; touch-action: none;
+  }
+  .stop small { display: block; font-weight: 400; font-size: 12px; opacity: .85; }
+  .readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+  .readout div { background: var(--key); border-radius: 8px; padding: 8px 10px; }
+  .readout span { display: block; font-size: 12px; color: var(--muted); }
+  .readout b { font-variant-numeric: tabular-nums; font-size: 17px; }
+  .distance b { font-size: 34px; font-variant-numeric: tabular-nums; }
+  .bar { height: 10px; border-radius: 5px; background: var(--key); overflow: hidden; margin-top: 8px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--ok); transition: width .15s; }
+  label { display: grid; grid-template-columns: 110px 1fr 76px; align-items: center; gap: 10px; margin: 6px 0; }
+  label output { text-align: right; font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; }
+  .help { color: var(--muted); font-size: 13px; margin: 0; }
+  kbd { background: var(--key); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font: 12px ui-monospace, monospace; }
+  @media (max-width: 520px) {
+    .drive { grid-template-columns: 1fr; justify-items: center; }
+    .stop { width: 100%; height: 64px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Rover Control</h1>
+    <div class="conn"><span class="dot" id="dot"></span><span id="conn">connecting…</span></div>
+  </header>
+
+  <section class="panel">
+    <div class="drive">
+      <div class="keys" id="keys">
+        <div class="key" data-key="q">Q<small>slide ←</small></div>
+        <div class="key" data-key="w">W<small>forward</small></div>
+        <div class="key" data-key="e">E<small>slide →</small></div>
+        <div class="key" data-key="a">A<small>turn ←</small></div>
+        <div class="key" data-key="s">S<small>back</small></div>
+        <div class="key" data-key="d">D<small>turn →</small></div>
+      </div>
+      <button class="stop" id="stop">STOP<small>space</small></button>
+    </div>
+    <div class="readout">
+      <div><span>forward</span><b id="vx">0.00</b> m/s</div>
+      <div><span>sideways</span><b id="vy">0.00</b> m/s</div>
+      <div><span>turn</span><b id="wz">0.00</b> rad/s</div>
+    </div>
+  </section>
+
+  <section class="panel distance">
+    <span class="help">Distance ahead (ultrasonic)</span><br>
+    <b id="dist">–</b> <span id="unit">m</span>
+    <div class="bar"><i id="distbar"></i></div>
+  </section>
+
+  <section class="panel">
+    <label>Speed <input type="range" id="lin" min="0.05" max="0.6" step="0.01" value="0.2"><output id="linv">0.20 m/s</output></label>
+    <label>Turn rate <input type="range" id="ang" min="0.2" max="3" step="0.1" value="1.0"><output id="angv">1.0 rad/s</output></label>
+    <p class="help">Hold <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to drive and turn, <kbd>Q</kbd><kbd>E</kbd> to slide sideways.
+      Keys combine (<kbd>W</kbd>+<kbd>A</kbd> curves left). The rover stops when you let go, press
+      <kbd>space</kbd>, switch tabs, or the connection drops.</p>
+  </section>
+</main>
+
+<script>
+(() => {
+  const held = new Set();
+  const $ = id => document.getElementById(id);
+  const keyEls = Object.fromEntries([...document.querySelectorAll(".key")].map(el => [el.dataset.key, el]));
+  let lastOk = 0, wasMoving = false, sending = false;
+
+  const lin = () => parseFloat($("lin").value);
+  const ang = () => parseFloat($("ang").value);
+
+  function command() {
+    const on = k => held.has(k) ? 1 : 0;
+    return {
+      vx: (on("w") - on("s")) * lin(),
+      vy: (on("q") - on("e")) * lin(),
+      wz: (on("a") - on("d")) * ang(),
+    };
+  }
+
+  function render(cmd) {
+    for (const [k, el] of Object.entries(keyEls)) el.classList.toggle("on", held.has(k));
+    $("vx").textContent = cmd.vx.toFixed(2);
+    $("vy").textContent = cmd.vy.toFixed(2);
+    $("wz").textContent = cmd.wz.toFixed(2);
+  }
+
+  function showStatus(s) {
+    lastOk = performance.now();
+    if (typeof s.distance_m === "number") {
+      const d = s.distance_m;
+      $("dist").textContent = d.toFixed(2);
+      const bar = $("distbar");
+      bar.style.width = Math.min(100, d / 1.5 * 100) + "%";
+      bar.style.background = d < 0.15 ? "var(--bad)" : d < 0.4 ? "var(--warn)" : "var(--ok)";
+    }
+    if (s.max_linear) $("lin").max = s.max_linear;
+    if (s.max_angular) $("ang").max = s.max_angular;
+  }
+
+  async function post(path, body) {
+    if (sending) return;           // never queue requests up behind a slow one
+    sending = true;
+    try {
+      const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify(body), cache: "no-store" });
+      if (r.ok) showStatus(await r.json());
+    } catch (e) { /* shown by the connection dot */ }
+    finally { sending = false; }
+  }
+
+  function stopAll() {
+    held.clear();
+    render(command());
+    sending = false;
+    post("/stop", {});
+    wasMoving = false;
+  }
+
+  // 20 Hz: while moving, keep sending the command (the rover stops if they stop arriving)
+  setInterval(() => {
+    const cmd = command();
+    render(cmd);
+    const moving = cmd.vx || cmd.vy || cmd.wz;
+    if (moving) { post("/cmd", cmd); wasMoving = true; }
+    else if (wasMoving) { post("/stop", {}); wasMoving = false; }
+  }, 50);
+
+  // status when idle + connection indicator
+  setInterval(async () => {
+    if (!wasMoving) {
+      try { const r = await fetch("/status", { cache: "no-store" }); if (r.ok) showStatus(await r.json()); } catch (e) {}
+    }
+    const ok = performance.now() - lastOk < 1500;
+    $("dot").classList.toggle("ok", ok);
+    $("conn").textContent = ok ? "connected" : "no connection";
+  }, 250);
+
+  const DRIVE_KEYS = new Set(["w", "a", "s", "d", "q", "e"]);
+  addEventListener("keydown", e => {
+    const k = e.key.toLowerCase();
+    if (k === " ") { e.preventDefault(); stopAll(); return; }
+    if (DRIVE_KEYS.has(k)) { e.preventDefault(); held.add(k); }
+  });
+  addEventListener("keyup", e => held.delete(e.key.toLowerCase()));
+  addEventListener("blur", stopAll);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) stopAll(); });
+
+  // on-screen buttons (mouse and touch)
+  for (const [k, el] of Object.entries(keyEls)) {
+    el.addEventListener("pointerdown", e => { el.setPointerCapture(e.pointerId); held.add(k); });
+    for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(ev, () => held.delete(k));
+  }
+  $("stop").addEventListener("pointerdown", stopAll);
+
+  for (const id of ["lin", "ang"]) {
+    $(id).addEventListener("input", () => {
+      $("linv").textContent = lin().toFixed(2) + " m/s";
+      $("angv").textContent = ang().toFixed(1) + " rad/s";
+    });
+  }
+})();
+</script>
+</body>
+</html>
