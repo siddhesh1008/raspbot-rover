@@ -1,0 +1,6 @@
+# Keep Linux line endings for everything that runs on the Pi or in WSL
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.stl binary
+*.dae binary
