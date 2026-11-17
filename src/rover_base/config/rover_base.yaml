@@ -1,0 +1,15 @@
+rover_base:
+  ros__parameters:
+    use_fake_bus: false        # true = no hardware, just log motor commands
+    cmd_timeout: 0.5           # s without /cmd_vel before the motors stop
+
+    # Geometry (m). Measure on the robot: centre to front axle, centre to wheel centre sideways.
+    half_wheelbase: 0.08
+    half_track: 0.085
+
+    # Motor model (no encoders, so this is open loop)
+    max_wheel_speed: 0.5       # m/s of a wheel at PWM 255; tune by timing a straight drive
+    max_pwm: 160               # safety cap while testing indoors (board max is 255)
+    min_pwm: 35                # smallest PWM that still turns the wheels
+
+    publish_ultrasonic: true

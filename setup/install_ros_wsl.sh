@@ -24,5 +24,11 @@ export ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
 # --- END ROVER ROS SETUP ---
 EOF
 
+echo "== WSL network fix for ROS (Fast DDS on home network + localhost only) =="
+mkdir -p ~/.config/rover
+cp "$here/wsl_ros_network.sh" ~/.config/rover/wsl_ros_network.sh
+grep -q 'wsl_ros_network.sh' ~/.bashrc || \
+  echo 'source ~/.config/rover/wsl_ros_network.sh   # ROS in WSL: see raspbot-rover/setup/wsl_ros_network.sh' >> ~/.bashrc
+
 echo
 echo "ROS 2 Jazzy install on WSL finished: INSTALL_DONE"

@@ -33,12 +33,20 @@ IR_NO_KEY = 0xFF
 
 
 class Motor(IntEnum):
-    """Motor numbers used by the board. Which physical corner each one is: see docs (verify)."""
+    """Motor numbers used by the board (tested on the robot).
 
-    L1 = 0
-    L2 = 1
-    R1 = 2
-    R2 = 3
+    Positive speed (direction byte 0) turns every wheel the way that drives the rover forward.
+    """
+
+    L1 = 0  # front-left
+    L2 = 1  # rear-left
+    R1 = 2  # front-right
+    R2 = 3  # rear-right
+
+    FRONT_LEFT = 0
+    REAR_LEFT = 1
+    FRONT_RIGHT = 2
+    REAR_RIGHT = 3
 
 
 class Servo(IntEnum):
