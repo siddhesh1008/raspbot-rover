@@ -18,6 +18,7 @@ import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Range
 
 from .server import Command, HmiServer
@@ -30,7 +31,7 @@ class HmiNode(Node):
         super().__init__("rover_hmi")
         port_param = self.declare_parameter("port", 8080).value
         port = port_param if port is None else port  # tests pass 0 = any free port
-        self.cmd_timeout = self.declare_parameter("cmd_timeout", 0.3).value
+        self.cmd_timeout = self.declare_parameter("cmd_timeout", 0.4).value
         max_linear = self.declare_parameter("max_linear", 0.6).value
         max_angular = self.declare_parameter("max_angular", 3.0).value
 
@@ -42,7 +43,8 @@ class HmiNode(Node):
         self.distance_m: float | None = None
 
         self.pub = self.create_publisher(Twist, "cmd_vel", 10)
-        self.create_subscription(Range, "ultrasonic", self.on_range, 10)
+        # sensor-data QoS (best effort) to match rover_base, which never blocks on this topic
+        self.create_subscription(Range, "ultrasonic", self.on_range, qos_profile_sensor_data)
         self.create_timer(0.05, self.tick)
 
         page = Path(get_package_share_directory("rover_hmi")) / "web" / "index.html"

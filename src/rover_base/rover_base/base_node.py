@@ -1,28 +1,36 @@
 """rover_base: the ROS 2 node that drives the real rover.
 
 Subscribes:  /cmd_vel   geometry_msgs/Twist   x forward, y left (m/s), angular.z (rad/s)
-Publishes:   /ultrasonic sensor_msgs/Range     distance ahead, 10 Hz
+Publishes:   /ultrasonic sensor_msgs/Range     distance ahead, 10 Hz (best effort, never blocks)
 
-Safety: motors stop when no /cmd_vel arrives for `cmd_timeout` seconds, and on shutdown.
+Safety:
+- The motor board keeps the last speed forever, so a separate watchdog THREAD (not a ROS timer)
+  stops the motors when no /cmd_vel has arrived for `cmd_timeout` seconds. It keeps working
+  even if the ROS side of this node is stuck (e.g. while the network interface is reset).
+- Motors also stop on start-up and shutdown.
 With `use_fake_bus: true` it runs anywhere (WSL, CI) and only logs what it would send.
 """
 
 from __future__ import annotations
 
+import threading
 import time
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Range
 
 from rover_driver import Board, FakeBus
 
 from .mecanum import Geometry, MotorLimits, body_to_wheels, wheels_to_pwm
 
+STOPPED = (0, 0, 0, 0)
+
 
 class RoverBase(Node):
-    def __init__(self, board: Board | None = None) -> None:
+    def __init__(self, board: Board | None = None, start_watchdog: bool = True) -> None:
         super().__init__("rover_base")
         p = self.declare_parameter
         self.use_fake_bus = p("use_fake_bus", False).value
@@ -41,18 +49,26 @@ class RoverBase(Node):
             self.board = Board(FakeBus())
         else:
             self.board = Board.open()
-        self.board.stop()
 
+        # One lock for all board access: the ROS callbacks and the watchdog thread share the bus.
+        self.board_lock = threading.Lock()
         self.last_cmd_time = -1e9
-        self.current_pwm = (0, 0, 0, 0)
+        self.current_pwm = STOPPED
+        with self.board_lock:
+            self.board.stop()
 
         self.create_subscription(Twist, "cmd_vel", self.on_cmd_vel, 10)
-        self.create_timer(0.05, self.on_watchdog)  # 20 Hz
 
         if self.publish_ultrasonic:
-            self.board.enable_ultrasonic(True)
-            self.range_pub = self.create_publisher(Range, "ultrasonic", 10)
+            with self.board_lock:
+                self.board.enable_ultrasonic(True)
+            self.range_pub = self.create_publisher(Range, "ultrasonic", qos_profile_sensor_data)
             self.create_timer(0.1, self.on_ultrasonic)  # 10 Hz
+
+        self.running = True
+        self.watchdog_thread = threading.Thread(target=self.watchdog_loop, daemon=True)
+        if start_watchdog:
+            self.watchdog_thread.start()
 
         self.get_logger().info(
             f"rover_base ready ({'FAKE bus' if self.use_fake_bus else 'I2C 0x2B'}), "
@@ -63,25 +79,34 @@ class RoverBase(Node):
 
     def on_cmd_vel(self, msg: Twist) -> None:
         wheels = body_to_wheels(msg.linear.x, msg.linear.y, msg.angular.z, self.geometry)
-        self.set_pwm(wheels_to_pwm(wheels, self.limits))
         self.last_cmd_time = time.monotonic()
+        self.set_pwm(wheels_to_pwm(wheels, self.limits))
 
-    def on_watchdog(self) -> None:
-        if self.current_pwm != (0, 0, 0, 0) and time.monotonic() - self.last_cmd_time > self.cmd_timeout:
-            self.get_logger().info("no /cmd_vel recently: stopping motors")
-            self.set_pwm((0, 0, 0, 0))
+    def watchdog_loop(self) -> None:
+        """Runs in its own thread, independent of the ROS executor."""
+        while self.running:
+            self.check_watchdog()
+            time.sleep(0.05)
+
+    def check_watchdog(self) -> None:
+        if self.current_pwm != STOPPED and time.monotonic() - self.last_cmd_time > self.cmd_timeout:
+            self.set_pwm(STOPPED)
+            self.get_logger().warning("no /cmd_vel for %.1f s: motors stopped" % self.cmd_timeout)
 
     def set_pwm(self, pwm: tuple[int, int, int, int]) -> None:
-        if pwm == self.current_pwm:
-            return
-        self.board.set_motors(*pwm)
-        self.current_pwm = pwm
+        with self.board_lock:
+            if pwm == self.current_pwm:
+                return
+            self.board.set_motors(*pwm)
+            self.current_pwm = pwm
         if self.use_fake_bus:
             self.get_logger().info(f"motors FL/RL/FR/RR = {pwm}")
 
     # --- sensors ---------------------------------------------------------------------------
 
     def on_ultrasonic(self) -> None:
+        with self.board_lock:
+            distance_mm = self.board.distance_mm()
         msg = Range()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "ultrasonic_link"
@@ -89,18 +114,22 @@ class RoverBase(Node):
         msg.field_of_view = 0.26  # ~15 deg, typical for this kind of sensor
         msg.min_range = 0.02
         msg.max_range = 4.0
-        msg.range = self.board.distance_mm() / 1000.0
+        msg.range = distance_mm / 1000.0
         self.range_pub.publish(msg)
 
     # --- shutdown --------------------------------------------------------------------------
 
     def shutdown(self) -> None:
+        self.running = False
         try:
-            self.board.stop()
-            if self.publish_ultrasonic:
-                self.board.enable_ultrasonic(False)
+            with self.board_lock:
+                self.board.stop()
+                self.current_pwm = STOPPED
+                if self.publish_ultrasonic:
+                    self.board.enable_ultrasonic(False)
         finally:
-            self.board.close()
+            with self.board_lock:
+                self.board.close()
 
 
 def main(args=None) -> None:
