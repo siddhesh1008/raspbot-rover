@@ -27,6 +27,8 @@ def generate_launch_description():
                 PathJoinSubstitution([FindPackageShare("rover_base"), "launch", "base.launch.py"]),
                 launch_arguments={"fake": fake}.items(),
             ),
-            Node(package="rover_hmi", executable="hmi", name="rover_hmi", output="screen"),
+            Node(package="rover_hmi", executable="hmi", name="rover_hmi", output="screen",
+                 # same file as rover_base: shared robot geometry for steering curves
+                 parameters=[PathJoinSubstitution([FindPackageShare("rover_base"), "config", "rover_base.yaml"])]),
         ]),
     ])

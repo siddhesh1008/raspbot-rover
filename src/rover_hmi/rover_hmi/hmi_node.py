@@ -34,6 +34,10 @@ class HmiNode(Node):
         self.cmd_timeout = self.declare_parameter("cmd_timeout", 0.4).value
         max_linear = self.declare_parameter("max_linear", 0.6).value
         max_angular = self.declare_parameter("max_angular", 3.0).value
+        # Robot geometry (shared with rover_base via rover_base.yaml). The page needs the lever
+        # arm (centre to wheel, along + across) to steer curves with a chosen inner-wheel speed.
+        self.turn_lever = (self.declare_parameter("half_wheelbase", 0.08).value
+                           + self.declare_parameter("half_track", 0.085).value)
 
         self.lock = threading.Lock()
         self.command: Command = ZERO
@@ -79,7 +83,7 @@ class HmiNode(Node):
 
     def status(self) -> dict:
         with self.lock:
-            return {"distance_m": self.distance_m}
+            return {"distance_m": self.distance_m, "turn_lever": self.turn_lever}
 
     def on_range(self, msg: Range) -> None:
         with self.lock:

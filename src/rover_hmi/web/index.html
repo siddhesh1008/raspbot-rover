@@ -106,9 +106,11 @@
   <section class="panel">
     <label>Speed <input type="range" id="lin" min="0.05" max="0.6" step="0.01" value="0.2"><output id="linv">0.20 m/s</output></label>
     <label>Turn rate <input type="range" id="ang" min="0.2" max="3" step="0.1" value="1.0"><output id="angv">1.0 rad/s</output></label>
-    <p class="help">Hold <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> to drive and turn, <kbd>Q</kbd><kbd>E</kbd> to slide sideways.
-      Keys combine (<kbd>W</kbd>+<kbd>A</kbd> curves left). The rover stops when you let go, press
-      <kbd>space</kbd>, switch tabs, or the connection drops.</p>
+    <label>Curve sharpness <input type="range" id="sharp" min="0" max="100" step="5" value="80"><output id="sharpv"></output></label>
+    <p class="help"><kbd>W</kbd>/<kbd>S</kbd> forward/back, <kbd>A</kbd>/<kbd>D</kbd> turn on the spot,
+      <kbd>Q</kbd>/<kbd>E</kbd> slide sideways. <kbd>W</kbd>+<kbd>A</kbd> drives a curve like a car;
+      <kbd>S</kbd>+<kbd>A</kbd> reverses like a car (back swings left). Opposite keys together do nothing.
+      The rover stops when you let go, press <kbd>space</kbd>, switch tabs, or the connection drops.</p>
   </section>
 </main>
 
@@ -122,6 +124,11 @@
   const lin = () => parseFloat($("lin").value);
   const ang = () => parseFloat($("ang").value);
 
+  // Curves (W/S + A/D): the slider sets how fast the INNER wheels turn compared to the outer
+  // ones: from 60 % forward (gentle curve) to 30 % backward (very tight, almost on the spot).
+  let turnLever = 0.165;   // m, centre to wheel along + across; the rover sends the real value
+  const innerFraction = () => 0.6 - 0.9 * parseFloat($("sharp").value) / 100;
+
   // Opposite keys together (W+S, Q+E, A+D) are a conflict: stop, and don't drive again until
   // ALL keys are released. Otherwise letting go of one of them would make the rover jump.
   const OPPOSITE = [["w", "s"], ["q", "e"], ["a", "d"]];
@@ -132,11 +139,19 @@
     if (locked && held.size === 0) locked = false;
     if (locked) return { vx: 0, vy: 0, wz: 0 };
     const on = k => held.has(k) ? 1 : 0;
-    return {
-      vx: (on("w") - on("s")) * lin(),
-      vy: (on("q") - on("e")) * lin(),
-      wz: (on("a") - on("d")) * ang(),
-    };
+    const vx = (on("w") - on("s")) * lin();
+    const vy = (on("q") - on("e")) * lin();
+    const steer = on("a") - on("d");   // +1 = left, -1 = right
+    let wz;
+    if (vx && steer) {
+      // Drive a curve like a car. Outer wheels at full speed, inner wheels at innerFraction of
+      // it. Because vx is signed, reversing (S + A) swings the rover's back to the left, as a car
+      // does when you reverse with the steering turned left.
+      wz = steer * vx * (1 - innerFraction()) / turnLever;
+    } else {
+      wz = steer * ang();              // A / D alone: turn on the spot
+    }
+    return { vx, vy, wz };
   }
 
   function render(cmd) {
@@ -158,6 +173,7 @@
     }
     if (s.max_linear) $("lin").max = s.max_linear;
     if (s.max_angular) $("ang").max = s.max_angular;
+    if (s.turn_lever > 0) turnLever = s.turn_lever;
   }
 
   // Every request carries an increasing sequence number; the rover ignores anything older than
@@ -277,12 +293,14 @@
   }
   $("stop").addEventListener("pointerdown", stopAll);
 
-  for (const id of ["lin", "ang"]) {
-    $(id).addEventListener("input", () => {
-      $("linv").textContent = lin().toFixed(2) + " m/s";
-      $("angv").textContent = ang().toFixed(1) + " rad/s";
-    });
+  function showSliders() {
+    $("linv").textContent = lin().toFixed(2) + " m/s";
+    $("angv").textContent = ang().toFixed(1) + " rad/s";
+    const f = innerFraction();
+    $("sharpv").textContent = "inner " + Math.round(Math.abs(f) * 100) + "% " + (f >= 0 ? "fwd" : "back");
   }
+  for (const id of ["lin", "ang", "sharp"]) $(id).addEventListener("input", showSliders);
+  showSliders();
 })();
 </script>
 </body>
